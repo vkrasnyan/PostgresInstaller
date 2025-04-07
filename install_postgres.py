@@ -38,15 +38,26 @@ class RemotePostgresInstaller:
         logger.info(f"Средняя загрузка: {load.strip()}")
         return float(load.strip())
 
+    def detect_os(self):
+        """Определяет ID операционной системы"""
+        os_check, _ = self.run_command("grep '^ID=' /etc/os-release | cut -d'=' -f2 | tr -d '\"'")
+        return os_check.strip().lower()
+
     def install_postgres(self):
         """Устанавливает PostgreSQL в зависимости от ОС"""
-        os_check, _ = self.run_command("cat /etc/os-release | grep '^ID=' | cut -d'=' -f2")
-        os_id = os_check.strip().lower()
+        os_id = self.detect_os()
 
         if os_id in ['debian', 'ubuntu']:
-            install_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql"
+            install_cmd = (
+                "DEBIAN_FRONTEND=noninteractive apt-get update && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql"
+            )
         elif os_id in ['centos', 'almalinux', 'rhel']:
-            install_cmd = "dnf install -y postgresql-server postgresql-contrib && postgresql-setup --initdb && systemctl enable postgresql"
+            install_cmd = (
+                "dnf install -y postgresql-server postgresql-contrib && "
+                "systemctl enable postgresql && "
+                "systemctl start postgresql"
+            )
         else:
             logger.error(f"ОС {os_id} не поддерживается")
             raise ValueError(f"ОС {os_id} не поддерживается")
@@ -57,10 +68,25 @@ class RemotePostgresInstaller:
 
     def configure_postgres(self):
         """Настраивает PostgreSQL для внешних подключений и ограничивает доступ пользователя"""
-        self.run_command(
-            """sed -i "s/^#listen_addresses = 'localhost'/listen_addresses = '*'/" /etc/postgresql/15/main/postgresql.conf"""
-        )
-        self.run_command("""grep -qxF "host all student 192.168.1.2/32 md5" /etc/postgresql/15/main/pg_hba.conf || echo "host all student 192.168.1.2/32 md5" >> /etc/postgresql/15/main/pg_hba.conf""")
+        os_id = self.detect_os()
+        if os_id in ['debian', 'ubuntu']:
+            config_path = "/etc/postgresql/15/main"
+            self.run_command(
+                f"""sed -i "s/^#listen_addresses = 'localhost'/listen_addresses = '*'/" {config_path}/postgresql.conf"""
+            )
+            self.run_command(f"""grep -qxF "host all student 192.168.1.2/32 md5" {config_path}/pg_hba.conf || echo "host all student 192.168.1.2/32 md5" >> {config_path}/pg_hba.conf""")
+        elif os_id in ['centos', 'almalinux', 'rhel']:
+            config_path = "/var/lib/pgsql/data"
+            self.run_command("test -f /var/lib/pgsql/data/PG_VERSION || postgresql-setup --initdb")
+            self.run_command(
+                f"""sed -i "s/^#listen_addresses = 'localhost'.*/listen_addresses = '*'/" {config_path}/postgresql.conf"""
+            )
+            self.run_command(
+                f"grep -qxF 'host all student 192.168.1.2/32 md5' {config_path}/pg_hba.conf || echo 'host all student 192.168.1.2/32 md5' >> {config_path}/pg_hba.conf")
+        else:
+            logger.error(f"ОС {os_id} не поддерживается")
+            raise ValueError(f"ОС {os_id} не поддерживается")
+
         self.run_command("systemctl restart postgresql")
         logger.info("PostgreSQL настроен")
 
@@ -90,8 +116,8 @@ if __name__ == "__main__":
 
     load = installer.check_load()
 
-    logger.info("Начинаем установку PostgreSQL")
-    installer.install_postgres()
+    # logger.info("Начинаем установку PostgreSQL")
+    # installer.install_postgres()
 
     logger.info("Настраиваем PostgreSQL")
     installer.configure_postgres()
