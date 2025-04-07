@@ -1,5 +1,6 @@
 import paramiko
 import logging
+import sys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -105,24 +106,57 @@ class RemotePostgresInstaller:
             self.client.close()
             logger.info("SSH-соединение закрыто")
 
+    @staticmethod
+    def choose_least_loaded_server(servers):
+        """Выбирает сервер с наименьшей нагрузкой"""
+        least_loaded_server = None
+        min_load = float('inf')
+        for server in servers:
+            server.connect()
+            load = server.check_load()
+            if load < min_load:
+                min_load = load
+                least_loaded_server = server
+            server.close()
+        return least_loaded_server
+
 
 if __name__ == "__main__":
-    hostname = "83.222.25.151"
+    if len(sys.argv) != 2:
+        print("Usage: python script.py <ip1,ip2>")
+        sys.exit(1)
+
     username = "root"
     ssh_key_path = "/home/vickie/PycharmProjects/PostgreSQL_install/postgresql"
 
-    installer = RemotePostgresInstaller(hostname, username, ssh_key_path)
-    installer.connect()
+    ip_list = sys.argv[1].split(",")
+    servers = []
 
-    load = installer.check_load()
+    for ip in ip_list:
+        installer = RemotePostgresInstaller(ip.strip(), username, ssh_key_path)
+        try:
+            installer.connect()
+            load = installer.check_load()
+            servers.append((installer, load))
+        except Exception as e:
+            logger.error(f"Пропускаем сервер {ip} из-за ошибки: {e}")
 
-    # logger.info("Начинаем установку PostgreSQL")
-    # installer.install_postgres()
+    if not servers:
+        logger.error("Нет доступных серверов")
+        sys.exit(1)
 
-    logger.info("Настраиваем PostgreSQL")
-    installer.configure_postgres()
+    target_installer = sorted(servers, key=lambda x: x[1])[0][0]
 
-    logger.info("Проверяем подключение к PostgreSQL")
-    installer.check_connection()
+    logger.info(f"Выбран сервер с наименьшей загрузкой: {target_installer.hostname}")
 
-    installer.close()
+    logger.info("Установка PostgreSQL")
+    target_installer.install_postgres()
+
+    logger.info("Настройка PostgreSQL")
+    target_installer.configure_postgres()
+
+    logger.info("Проверка подключения к PostgreSQL")
+    target_installer.check_connection()
+
+    for installer, _ in servers:
+        installer.close()
