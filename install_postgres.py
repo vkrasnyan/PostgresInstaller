@@ -44,7 +44,7 @@ class RemotePostgresInstaller:
         os_id = os_check.strip().lower()
 
         if os_id in ['debian', 'ubuntu']:
-            install_cmd = "apt update && apt install -y postgresql"
+            install_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql"
         elif os_id in ['centos', 'almalinux', 'rhel']:
             install_cmd = "dnf install -y postgresql-server postgresql-contrib && postgresql-setup --initdb && systemctl enable postgresql"
         else:
@@ -66,7 +66,7 @@ class RemotePostgresInstaller:
 
     def check_connection(self):
         """Проверяет доступность PostgreSQL"""
-        output, error = self.run_command("sudo -H -u postgres psql -c 'SELECT 1;'")
+        output, error = self.run_command("""sudo -u postgres bash -c 'cd ~ && psql -c "SELECT 1;"'""")
         if "1 row" in output:
             logger.info("PostgreSQL успешно отвечает на запросы")
         else:
@@ -88,13 +88,13 @@ if __name__ == "__main__":
     installer = RemotePostgresInstaller(hostname, username, ssh_key_path)
     installer.connect()
 
-    # load = installer.check_load()
+    load = installer.check_load()
 
-    # logger.info("Начинаем установку PostgreSQL")
-    # installer.install_postgres()
+    logger.info("Начинаем установку PostgreSQL")
+    installer.install_postgres()
 
-    # logger.info("Настраиваем PostgreSQL")
-    # installer.configure_postgres()
+    logger.info("Настраиваем PostgreSQL")
+    installer.configure_postgres()
 
     logger.info("Проверяем подключение к PostgreSQL")
     installer.check_connection()
