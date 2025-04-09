@@ -1,6 +1,9 @@
 import paramiko
 import logging
+import psycopg2
 import sys
+
+from psycopg2 import OperationalError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -25,12 +28,21 @@ class RemotePostgresInstaller:
             raise
 
     def run_command(self, command):
-        """Выполняет команду на удаленном сервере"""
+        """Выполняет команду на удаленном сервере и правильно обрабатывает ошибки"""
         logger.info(f"Выполнение команды: {command}")
         stdin, stdout, stderr = self.client.exec_command(command)
-        output, error = stdout.read().decode(), stderr.read().decode()
-        if error:
+
+        output = stdout.read().decode()
+        error = stderr.read().decode()
+
+        if stderr.channel.recv_exit_status() != 0:
             logger.error(f"Ошибка выполнения: {error}")
+        else:
+            if "error" in error.lower() or "failed" in error.lower():
+                logger.error(f"Ошибка выполнения: {error}")
+            else:
+                logger.info(f"Результат выполнения:\n{output}")
+
         return output, error
 
     def check_load(self):
@@ -44,6 +56,24 @@ class RemotePostgresInstaller:
         os_check, _ = self.run_command("grep '^ID=' /etc/os-release | cut -d'=' -f2 | tr -d '\"'")
         return os_check.strip().lower()
 
+    def check_postgres_connection(self, host, user='student', password='your_password', dbname='postgres', port=5432):
+        """Проверка подключения к базе данных PostgreSQL через psql"""
+        logger.info(f"Проверка подключения к PostgreSQL на {host}")
+
+        cmd = (
+            f"PGPASSWORD={password} psql -U {user} -h {host} -p {port} -d {dbname} "
+            f"-tAc \"SELECT 1;\""
+        )
+
+        output, error = self.run_command(cmd)
+
+        if error:
+            logger.error(f"Ошибка подключения к PostgreSQL на {host}: {error.strip()}")
+        elif output.strip() == "1":
+            logger.info(f"Успешное подключение к PostgreSQL на {host}")
+        else:
+            logger.error(f"Неожиданный результат от PostgreSQL: '{output.strip()}'")
+
     def install_postgres(self):
         """Устанавливает PostgreSQL в зависимости от ОС"""
         os_id = self.detect_os()
@@ -56,9 +86,11 @@ class RemotePostgresInstaller:
         elif os_id in ['centos', 'almalinux', 'rhel']:
             install_cmd = (
                 "dnf install -y postgresql-server postgresql-contrib && "
+                "postgresql-setup --initdb && "
                 "systemctl enable postgresql && "
                 "systemctl start postgresql"
             )
+
         else:
             logger.error(f"ОС {os_id} не поддерживается")
             raise ValueError(f"ОС {os_id} не поддерживается")
@@ -70,26 +102,43 @@ class RemotePostgresInstaller:
     def configure_postgres(self):
         """Настраивает PostgreSQL для внешних подключений и ограничивает доступ пользователя"""
         os_id = self.detect_os()
+
         if os_id in ['debian', 'ubuntu']:
             config_path = "/etc/postgresql/15/main"
             self.run_command(
                 f"""sed -i "s/^#listen_addresses = 'localhost'/listen_addresses = '*'/" {config_path}/postgresql.conf"""
             )
-            self.run_command(f"""grep -qxF "host all student 192.168.1.2/32 md5" {config_path}/pg_hba.conf || echo "host all student 192.168.1.2/32 md5" >> {config_path}/pg_hba.conf""")
+            self.run_command(
+                f"""grep -qxF "host all student 0.0.0.0/0 md5" {config_path}/pg_hba.conf || echo "host all student 192.168.1.42/32 md5" >> {config_path}/pg_hba.conf"""
+            )
+
         elif os_id in ['centos', 'almalinux', 'rhel']:
             config_path = "/var/lib/pgsql/data"
             self.run_command("test -f /var/lib/pgsql/data/PG_VERSION || postgresql-setup --initdb")
             self.run_command(
-                f"""sed -i "s/^#listen_addresses = 'localhost'.*/listen_addresses = '*'/" {config_path}/postgresql.conf"""
+                f"""grep -q "^#\\?listen_addresses" {config_path}/postgresql.conf && \
+                sed -i "s/^#\\?listen_addresses.*/listen_addresses = '*'/" {config_path}/postgresql.conf || \
+                echo "listen_addresses = '*'" >> {config_path}/postgresql.conf"""
             )
             self.run_command(
-                f"grep -qxF 'host all student 192.168.1.2/32 md5' {config_path}/pg_hba.conf || echo 'host all student 192.168.1.2/32 md5' >> {config_path}/pg_hba.conf")
+                f"""grep -qxF "host all student 0.0.0.0/0 md5" {config_path}/pg_hba.conf || echo "host all student 192.168.1.42/32 md5" >> {config_path}/pg_hba.conf"""
+            )
+
         else:
             logger.error(f"ОС {os_id} не поддерживается")
             raise ValueError(f"ОС {os_id} не поддерживается")
 
+        self.run_command(
+            """sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='student'" | grep -q 1 || \
+            sudo -u postgres psql -c "CREATE USER student WITH LOGIN PASSWORD 'your_password';" """
+        )
+        self.run_command(
+            """sudo -u postgres psql -c "ALTER USER student WITH PASSWORD 'your_password';" """
+        )
         self.run_command("systemctl restart postgresql")
         logger.info("PostgreSQL настроен")
+
+        self.check_postgres_connection(self.hostname)
 
     def check_connection(self):
         """Проверяет доступность PostgreSQL"""
@@ -149,8 +198,8 @@ if __name__ == "__main__":
 
     logger.info(f"Выбран сервер с наименьшей загрузкой: {target_installer.hostname}")
 
-    logger.info("Установка PostgreSQL")
-    target_installer.install_postgres()
+    # logger.info("Установка PostgreSQL")
+    # target_installer.install_postgres()
 
     logger.info("Настройка PostgreSQL")
     target_installer.configure_postgres()
