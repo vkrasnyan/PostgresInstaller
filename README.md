@@ -77,7 +77,7 @@ ssh_key_path = "/путь/к/ssh_ключу"
 ### ✅ Проверка подключения
 ![Проверка подключения](images/connect.png)
 
-### 🔧 Настройка PostgreSQL
+### 🔧 Установка PostgreSQL
 ![Установка PostgreSQL](images/setup.png)
 
 ### 🔌 Настройка PostgreSQL
