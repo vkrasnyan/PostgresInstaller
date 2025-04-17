@@ -1,12 +1,11 @@
 import paramiko
 import logging
-import psycopg2
 import sys
-
-from psycopg2 import OperationalError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+paramiko.util.log_to_file("paramiko_debug.log", level=logging.DEBUG)
 
 
 class RemotePostgresInstaller:
@@ -155,20 +154,6 @@ class RemotePostgresInstaller:
             self.client.close()
             logger.info("SSH-соединение закрыто")
 
-    @staticmethod
-    def choose_least_loaded_server(servers):
-        """Выбирает сервер с наименьшей нагрузкой"""
-        least_loaded_server = None
-        min_load = float('inf')
-        for server in servers:
-            server.connect()
-            load = server.check_load()
-            if load < min_load:
-                min_load = load
-                least_loaded_server = server
-            server.close()
-        return least_loaded_server
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -176,7 +161,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     username = "root"
-    ssh_key_path = "/home/vickie/PycharmProjects/PostgreSQL_install/postgresql"
+    ssh_key_path = "/home/vickie/.ssh/id_ed25519"
 
     ip_list = sys.argv[1].split(",")
     servers = []
